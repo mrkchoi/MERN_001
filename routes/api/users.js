@@ -2,14 +2,37 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const User = require('../../models/User');
+const jwt = require('jsonwebtoken');
+const keys = require('../../config/keys.js');
+const passport = require('passport');
+const validateLoginInput = require('../../validation/login');
+const validateRegisterInput = require('../../validation/register');
 
 router.get('/test', (req, res) => res.json({ msg: 'This is the users route' }));
 
+// Current User
+router.get('/current', passport.authenticate('jwt', {session: false}), (req, res) => {
+  res.json({
+    id: req.user.id,
+    handle: req.user.handle,
+    email: req.user.email
+  });
+})
+
+
+// Registration
 router.post('/register', (req, res) => {
-  User.findOne({ email: req.body.email })
+  const { errors, isValid } = validateRegisterInput(req.body);
+  
+  if (!isValid) {
+    return res.status(400).json(errors);
+  }
+  
+  User.findOne({ name: req.body.handle })
     .then(user => {
       if (user) {
-        return res.status(400).json({email: 'A user has already been registered with this address'});
+        errors.handle = 'User already exists';
+        return res.status(400).json(errors);
       } else {
         const newUser = new User({
           handle: req.body.handle,
@@ -21,8 +44,22 @@ router.post('/register', (req, res) => {
           bcrypt.hash(newUser.password, salt, (err, hash) => {
             if (err) throw err;
             newUser.password = hash;
-            newUser.save()
-              .then(user => res.json(user))
+            newUser
+              .save()
+              .then(user => {
+                const payload = { id: user.id, handle: user.handle};
+
+                jwt.sign(
+                  payload, 
+                  keys.secretOrKey, 
+                  {expiresIn: 3600}, 
+                  (err, token) => {
+                  res.json({
+                    success: true,
+                    token: "Bearer " + token
+                  })
+                })
+              })
               .catch(err => console.log(err))
           })
         })
@@ -30,22 +67,44 @@ router.post('/register', (req, res) => {
     })
 })
 
+
+// Login
 router.post('/login', (req, res) => {
+  const { errors, isValid } = validateLoginInput(req.body);
+
+  if (!isValid) {
+    return res.status(400).json(errors);
+  }
+  
   const email = req.body.email;
   const password = req.body.password;
 
-  User.findOne({email})
+  User.findOne({ email })
     .then(user => {
       if (!user) {
-        return res.status(404).json({email: 'This user does not exist'});
+        errors.email = 'This username does not exist';
+        return res.status(400).json(errors);
       }
 
       bcrypt.compare(password, user.password)
         .then(isMatch => {
           if (isMatch) {
-            res.json({msg: 'Success'});
+            const payload = { id: user.id, handle: user.handle, email: user.email};
+
+            jwt.sign(
+              payload,
+              keys.secretOrKey,
+              {expiresIn: 3600},
+              (err, token) => {
+                res.json({
+                  success: true,
+                  token: 'Bearer ' + token
+                });
+              }
+            );
+            // res.json({msg: 'Success'});
           } else {
-            return res.status(400).json({password: 'Incorrect password'});
+            return res.status(400).json(errors);
           }
         })
     })
